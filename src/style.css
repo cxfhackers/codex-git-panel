@@ -70,3 +70,11 @@ dialog{padding:18px;max-height:calc(100dvh - 32px);overflow:auto;scrollbar-gutte
 .conflict-dialog .dialog-actions{position:sticky;bottom:-16px;padding:10px 0 4px;margin-top:12px;background:#272a30;border-top:1px solid var(--border);z-index:1}.conflict-dialog .dialog-actions button:first-child{margin-right:auto;font-size:11px}
 @media(max-width:740px){.merge-editors{grid-template-columns:1fr}.merge-editors .merge-result{grid-row:1}.merge-editors textarea{height:150px;min-height:100px}.merge-editors .merge-result textarea{height:200px}.conflict-blocks{max-height:200px}.conflict-dialog .dialog-actions button{font-size:11px;padding:6px 8px}.conflict-block-code{grid-template-columns:1fr}}
 @media(max-height:520px){.branch-dropdown .branch-list{max-height:32dvh}.merge-editors textarea{height:130px;min-height:90px}}
+
+/* Direct update feedback sits on the seam between the toolbar and project path. */
+.update-lightbar{position:relative;z-index:1;block-size:0;pointer-events:none}
+.update-lightbar::before{content:"";position:absolute;inset-block-start:0;inset-inline:0;block-size:4px;background:linear-gradient(90deg,#328f79,#416eac,#775ab2,#a85c87)}
+.update-lightbar>span{position:absolute;inset-block-start:0;inset-inline-start:0;inline-size:35%;block-size:4px;background:linear-gradient(90deg,#65d7ad,#68b8f4,#a28cff,#ed92be);box-shadow:0 0 12px #8ab9ff99;animation:update-lightbar-sweep 1.3s ease-in-out infinite}
+.update-lightbar>progress{position:absolute;inline-size:1px;block-size:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@keyframes update-lightbar-sweep{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+@media(prefers-reduced-motion:reduce){.update-lightbar>span{inline-size:100%;transform:none;animation:none}}

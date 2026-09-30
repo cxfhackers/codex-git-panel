@@ -23,7 +23,7 @@ function App() {
   const [diffLoading, setDiffLoading] = useState(false), [pendingStaging, setPendingStaging] = useState([]);
   const [branchOpen, setBranchOpen] = useState(false), [mergeConfirm, setMergeConfirm] = useState('');
   const [resolvePath, setResolvePath] = useState('');
-  const [project, setProject] = useState(null), [syncMode, setSyncMode] = useState(''), [syncInfo, setSyncInfo] = useState(null);
+  const [project, setProject] = useState(null), [syncMode, setSyncMode] = useState(''), [syncInfo, setSyncInfo] = useState(null), [updating, setUpdating] = useState(false);
   const projectKey = useRef(''), branchTrigger = useRef(null), selectionAnchor = useRef(null);
   const diffSerial = useRef(0), patchCache = useRef(new Map()), stagingQueue = useRef(null), pending = useRef(false), context = useRef({ id: '', state: null, message: '', generated: '' });
   if (!stagingQueue.current) stagingQueue.current = createStagingQueue({
@@ -151,23 +151,46 @@ function App() {
       return result;
     });
   }
+  function applySyncResult(result) {
+    if (result.state) { const moved = context.current.state.head !== result.state.head; acceptState(result.state); if (moved) { ++diffSerial.current; clearSelection(); setPath(''); setPatch(''); } }
+    if (result.previewToken) setSyncInfo(result);
+    else if (result.status === 'success') { setSyncInfo(null); setNotice(result.output); if (result.warning) setError(result.warning); }
+    else if (result.status === 'conflict' || result.status === 'merge-pending' || result.status === 'restore-conflict') { setSyncInfo(null); setError(result.warning); const conflict = result.state?.files.find(f => f.conflict); if (conflict) { setSyncMode(''); setResolvePath(conflict.path); } }
+    return result;
+  }
   async function syncAction(name, args) {
     return runTask(async () => {
-      try {
-        const result = await request(`/api/action?id=${context.current.id}`, { action: name, ...args });
-        if (result.state) { const moved = context.current.state.head !== result.state.head; acceptState(result.state); if (moved) { ++diffSerial.current; clearSelection(); setPath(''); setPatch(''); } }
-        if (result.previewToken) setSyncInfo(result);
-        else if (result.status === 'success') { setSyncInfo(null); setNotice(result.output); if (result.warning) setError(result.warning); }
-        else if (result.status === 'conflict' || result.status === 'merge-pending' || result.status === 'restore-conflict') { setSyncInfo(null); setError(result.warning); const conflict = result.state?.files.find(f => f.conflict); if (conflict) { setSyncMode(''); setResolvePath(conflict.path); } }
-        return result;
-      } catch (e) { return { status: 'error', error: e.message }; }
+      try { return applySyncResult(await request(`/api/action?id=${context.current.id}`, { action: name, ...args })); }
+      catch (e) { return { status: 'error', error: e.message }; }
     });
+  }
+  async function updateCurrentBranch() {
+    if (!context.current.id || pending.current || stagingQueue.current.size) return;
+    setUpdating(true);
+    try {
+      await runTask(async () => {
+        const repoId = context.current.id, before = context.current.state;
+        const target = await request(`/api/sync-targets?id=${repoId}`);
+        if (!target.remote || !target.branch) throw new Error('当前分支没有可更新的远程，请先配置 Git remote 或上游分支');
+        const strategy = storage.get('git-panel-sync-strategy:' + before.root) === 'rebase' ? 'rebase' : 'merge';
+        let preview = applySyncResult(await request(`/api/action?id=${repoId}`, { action: 'sync-check', revision: before.revision, remote: target.remote, branch: target.branch, strategy, setUpstream: target.setUpstream }));
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (!preview.remoteExists || preview.behind === 0) { setNotice(preview.remoteExists ? '当前分支已是最新，无需更新' : '远程分支尚不存在，无需更新'); return; }
+          const result = applySyncResult(await request(`/api/action?id=${repoId}`, { action: 'sync-update', revision: preview.state.revision, previewToken: preview.previewToken }));
+          if (result.status === 'remote-changed') { preview = result; continue; }
+          if (['success', 'conflict', 'merge-pending', 'restore-conflict'].includes(result.status)) return;
+          throw new Error(result.error || result.warning || result.output || '更新未完成，请重试');
+        }
+        throw new Error('远程分支持续变化，请稍后再点更新');
+      });
+    } finally { setUpdating(false); }
   }
   const freshSync = syncInfo?.state.head === state?.head && syncInfo?.state.headRef === state?.headRef ? syncInfo : null;
   const counts = freshSync || state?.sync;
   const changed = generated && generated !== state?.revision;
   return <main className="app">
-    <header className="toolbar"><h1><GitBranch size={23}/>Git</h1><div className="repository-picker"><label htmlFor="active-repository">仓库</label><Dropdown id="active-repository" label="切换 Git 仓库" title={state?.root || '选择 Git 仓库'} value={state?.root || ''} options={projects.map(p => ({ value: p.root, label: p.label }))} disabled={locked} onChange={openRepo} placeholder="选择仓库…" className="repository-dropdown"/></div><button className="repo-button" aria-label="当前项目仓库" title="当前项目仓库 / worktree" disabled={locked} onClick={() => { setCustom(state?.root || ''); setDialog('repo'); }}><FolderOpen size={15}/></button>{state && <button ref={branchTrigger} className="branch" aria-label="分支管理" aria-haspopup="dialog" aria-expanded={branchOpen} title="切换或合并分支" disabled={locked} onClick={() => setBranchOpen(true)}><GitBranch size={14}/><span className="branch-name">{state.branch}</span><ChevronDown size={13}/></button>}{state && <div className="sync-controls"><button aria-label="更新" title="检查远程并更新当前分支" disabled={locked || !state.headRef || !!state.operation} onClick={() => setSyncMode('update')}><ArrowDown size={14}/><span className="action-label">更新</span></button><button aria-label="推送" title={`检查远程并推送${counts ? ` · ${counts.ahead} 个待推送提交` : ''}`} className="push-button" disabled={locked || !state.headRef || !!state.operation || !state.head} onClick={() => setSyncMode('push')}><ArrowUp size={14}/><span className="action-label">推送</span></button>{counts && <div className="sync-status" aria-label="同步状态" title={`${freshSync?.target.name || state.upstream || '未设置上游'} · ${counts.ahead} 待推送 · ${counts.behind} 待更新 · ${freshSync ? '已检查远程' : '本机记录'}`}><span className="outgoing">↑ {counts.ahead}<span className="count-label"> 待推送</span></span><span className="incoming">↓ {counts.behind}<span className="count-label"> 待更新</span></span><small className="sync-source">{freshSync ? '已检查远程' : '本机记录'}</small></div>}</div>}<button className="refresh" aria-label="刷新" disabled={!state || locked} onClick={refresh}><RefreshCw size={16} className={busy ? 'spinning' : ''}/><span>刷新</span></button></header>
+    <header className="toolbar"><h1><GitBranch size={23}/>Git</h1><div className="repository-picker"><label htmlFor="active-repository">仓库</label><Dropdown id="active-repository" label="切换 Git 仓库" title={state?.root || '选择 Git 仓库'} value={state?.root || ''} options={projects.map(p => ({ value: p.root, label: p.label }))} disabled={locked} onChange={openRepo} placeholder="选择仓库…" className="repository-dropdown"/></div><button className="repo-button" aria-label="当前项目仓库" title="当前项目仓库 / worktree" disabled={locked} onClick={() => { setCustom(state?.root || ''); setDialog('repo'); }}><FolderOpen size={15}/></button>{state && <button ref={branchTrigger} className="branch" aria-label="分支管理" aria-haspopup="dialog" aria-expanded={branchOpen} title="切换或合并分支" disabled={locked} onClick={() => setBranchOpen(true)}><GitBranch size={14}/><span className="branch-name">{state.branch}</span><ChevronDown size={13}/></button>}{state && <div className="sync-controls"><button aria-label="更新" title="直接检查远程并更新当前分支" disabled={locked || !state.headRef || !state.head || !!state.operation} onClick={updateCurrentBranch}><ArrowDown size={14}/><span className="action-label">更新</span></button><button aria-label="推送" title={`检查远程并推送${counts ? ` · ${counts.ahead} 个待推送提交` : ''}`} className="push-button" disabled={locked || !state.headRef || !!state.operation || !state.head} onClick={() => setSyncMode('push')}><ArrowUp size={14}/><span className="action-label">推送</span></button>{counts && <div className="sync-status" aria-label="同步状态" title={`${freshSync?.target.name || state.upstream || '未设置上游'} · ${counts.ahead} 待推送 · ${counts.behind} 待更新 · ${freshSync ? '已检查远程' : '本机记录'}`}><span className="outgoing">↑ {counts.ahead}<span className="count-label"> 待推送</span></span><span className="incoming">↓ {counts.behind}<span className="count-label"> 待更新</span></span><small className="sync-source">{freshSync ? '已检查远程' : '本机记录'}</small></div>}</div>}<button className="refresh" aria-label="刷新" disabled={!state || locked} onClick={refresh}><RefreshCw size={16} className={busy ? 'spinning' : ''}/><span>刷新</span></button></header>
+    {updating && <div className="update-lightbar"><progress aria-label="正在更新当前分支"/><span aria-hidden="true"/></div>}
     <div className="repo-path" title={state?.root}>{project?.label ? `${project.label} · ` : ''}{state?.root || '当前目录未找到 Git 仓库，请选择项目仓库'}</div>
     {state?.operation && <section className="operation-banner" aria-label="Git 操作状态"><div><strong>{state.operation.type === 'local-restore' ? '本地改动待恢复 · 原始备份已保留' : ['merge', 'rebase'].includes(state.operation.type) ? conflicts.length ? `${state.operation.type === 'rebase' ? '变基' : '合并'}进行中 · ${conflicts.length} 个冲突文件` : `${state.operation.type === 'rebase' ? '变基' : '合并'}待完成` : `Git 操作未完成：${state.operation.type}`}</strong><p>{state.operation.type === 'local-restore' ? '先核对恢复结果。打开冲突文件进行三方合并并标记已解决，再完成恢复；不需要提交本地文件。原始内容可在 Git stash 中查看。' : ['merge', 'rebase'].includes(state.operation.type) ? conflicts.length ? '点击冲突文件使用智能合并，核对结果并暂存后继续；也可中止当前操作。' : '核对暂存内容后继续当前操作。' : '请在原 IDE 或终端完成当前操作，再刷新面板。'}</p>{state.operation.localBackup && state.operation.type !== 'local-restore' && <p>本地改动已自动保存，完成或中止后将恢复。</p>}</div>{state.operation.type === 'local-restore' ? <div className="operation-actions">{['saved', 'preparing'].includes(state.operation.localBackup.phase) && <button disabled={locked || !!state.files.length} onClick={() => setMergeConfirm('restore-retry')}>重试恢复</button>}<button disabled={locked || !!conflicts.length} onClick={() => setMergeConfirm('restore-finish')}>完成恢复</button></div> : ['merge', 'rebase'].includes(state.operation.type) && <div className="operation-actions"><button disabled={locked || !!conflicts.length || state.operation.type === 'rebase' && state.files.some(f => f.unstaged)} onClick={() => setMergeConfirm(state.operation.type + '-continue')}>继续{state.operation.type === 'rebase' ? '变基' : '合并'}</button><button disabled={locked} onClick={() => setMergeConfirm(state.operation.type + '-abort')}>中止{state.operation.type === 'rebase' ? '变基' : '合并'}</button></div>}</section>}
     {(error || notice) && <div role={error ? 'alert' : 'status'} className={`notification ${error ? 'error' : 'success'}`}>{error ? <AlertCircle size={16}/> : <Check size={16}/>}<span>{error || notice}</span><button aria-label="关闭通知" onClick={() => { setError(''); setNotice(''); }}>×</button></div>}

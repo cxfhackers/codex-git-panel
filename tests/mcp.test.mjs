@@ -25,7 +25,7 @@ test('MCP exposes one thread entrypoint and a self-contained UI with no network 
   const c = await clientFor(t), { tools } = await c.listTools();
   const launchers = tools.filter(x => x._meta?.['openai/ui']?.entrypoints?.some(e => e.type === 'thread'));
   assert.equal(launchers.length, 1); assert.equal(launchers[0].title, 'Git 提交');
-  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.8.6/main.html');
+  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.8.7/main.html');
   const resource = await c.readResource({ uri: launchers[0]._meta.ui.resourceUri });
   const html = resource.contents[0];
   assert.equal(html.mimeType, 'text/html;profile=mcp-app');

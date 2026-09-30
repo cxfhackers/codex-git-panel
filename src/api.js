@@ -10,7 +10,7 @@ async function call(name, args = {}) {
 }
 export async function initialize() {
   if (isMcp) {
-    bridge = new App({ name: 'Git 提交', version: '0.7.0' }, {}, { autoResize: false });
+    bridge = new App({ name: 'Git 提交', version: '0.8.7' }, {}, { autoResize: false });
     connected = bridge.connect(undefined, { timeout: 15000 });
     return call('git_panel_session');
   }
