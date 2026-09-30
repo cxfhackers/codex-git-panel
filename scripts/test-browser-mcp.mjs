@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { git } from '../server/git.mjs';
 const base = fileURLToPath(new URL('../', import.meta.url));
-const c = new Client({ name: 'git-panel-browser-qa', version: '0.8.5' });
+const c = new Client({ name: 'git-panel-browser-qa', version: '0.8.6' });
 await mkdir(base + '../../work/git-panel-qa', { recursive: true });
 const workspace = await mkdtemp(base + '../../work/git-panel-qa/mcp-browser-');
 const syncQa = process.env.GIT_PANEL_QA_SYNC === '1';
@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.url === '/app') {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      const html = (await c.readResource({ uri: 'ui://git-panel/0.8.5/main.html' })).contents[0].text;
+      const html = (await c.readResource({ uri: 'ui://git-panel/0.8.6/main.html' })).contents[0].text;
       return res.end(process.env.GIT_PANEL_QA_NO_POPOVER === '1' ? html.replace('<head>', '<head><script>HTMLElement.prototype.showPopover = undefined;</script>') : html);
     }
     if (req.url === '/rpc' && req.method === 'POST') {

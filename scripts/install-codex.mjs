@@ -17,7 +17,7 @@ if (process.platform === 'darwin') candidates.push(
 );
 let cli;
 for (const candidate of candidates.filter(Boolean)) {
-  const check = spawnSync(candidate, ['mcp', 'list'], { encoding: 'utf8' });
+  const check = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
   if (!check.error && check.status === 0) { cli = candidate; break; }
 }
 if (!cli) {

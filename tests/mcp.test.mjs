@@ -9,9 +9,11 @@ import { git } from '../server/git.mjs';
 import { conflictParts, mergeChoices } from '../src/conflicts.js';
 
 const base = fileURLToPath(new URL('../', import.meta.url));
+const scratch = join(base, '../../work/git-panel-qa');
 async function clientFor(t) {
+  await mkdir(scratch, { recursive: true });
   const client = new Client({ name: 'git-panel-test', version: '1.0.0' });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [join(base, 'server/mcp.mjs')], stderr: 'pipe' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [join(base, 'server/mcp.mjs')], cwd: scratch, stderr: 'pipe' });
   await client.connect(transport); t.after(() => client.close()); return client;
 }
 async function call(client, name, args = {}) {
@@ -23,7 +25,7 @@ test('MCP exposes one thread entrypoint and a self-contained UI with no network 
   const c = await clientFor(t), { tools } = await c.listTools();
   const launchers = tools.filter(x => x._meta?.['openai/ui']?.entrypoints?.some(e => e.type === 'thread'));
   assert.equal(launchers.length, 1); assert.equal(launchers[0].title, 'Git 提交');
-  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.8.5/main.html');
+  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.8.6/main.html');
   const resource = await c.readResource({ uri: launchers[0]._meta.ui.resourceUri });
   const html = resource.contents[0];
   assert.equal(html.mimeType, 'text/html;profile=mcp-app');
@@ -42,7 +44,7 @@ test('MCP exposes one thread entrypoint and a self-contained UI with no network 
   }
   assert.equal(tools.find(x => x.name === 'git_abort_merge').annotations.destructiveHint, true);
   const data = await call(c, 'open_git_panel'); assert.ok(Array.isArray(data.projects));
-  assert.ok(data.project.key); assert.equal(data.project.cwd, process.cwd());
+  assert.ok(data.project.key); assert.equal(data.project.cwd, scratch);
   assert.equal(data.projects.some(p => p.root.endsWith('/ibms-service')), false);
 });
 test('MCP conflict tools read three versions and apply a reviewed file without committing', async t => {

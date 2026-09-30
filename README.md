@@ -1,12 +1,12 @@
 # Codex Git 提交面板
 
-在 Codex 中打开的 Git 面板，提供类似 IntelliJ IDEA 提交窗口的工作区文件、暂存区、差异预览、分支、合并、更新与推送操作。它通过本地 MCP App 运行，不修改 Codex 安装包。当前版本 **0.8.5**。
+在 Codex 中打开的 Git 面板，提供类似 IntelliJ IDEA 提交窗口的工作区文件、暂存区、差异预览、分支、合并、更新与推送操作。它通过本地 MCP App 运行，不修改 Codex 安装包。当前版本 **0.8.6**。
 
 > 此项目是 Codex 的 MCP 工具页面，不是 Chrome 扩展，也不会在 Codex 原生 Git 提交弹窗中插入按钮。安装后可从 Codex 的工具入口打开，或在聊天中调用 `open_git_panel`。
 
 ## 安装
 
-需要 Git、Node.js 20.19+、npm 和已安装的 [Codex CLI](https://developers.openai.com/codex/cli)；AI 提交说明还需要 CLI 已登录并可使用模型。macOS、Linux、Windows 均可通过 Node.js 脚本安装。请把项目放在一个稳定目录，安装后不要移动它。
+需要 Git、Node.js 20.19+、npm 和已安装的 [Codex CLI](https://developers.openai.com/codex/cli)；AI 提交说明还需要 CLI 已登录并可使用模型。目前已在 macOS 验证安装，Linux 可按相同步骤尝试；Windows 路径尚未适配。请把项目放在一个稳定目录，安装后不要移动它。
 
 **方式一：GitHub Release 压缩包**
 
@@ -28,7 +28,7 @@ npm run install:codex
 
 安装脚本会检查面板资源和现有 MCP 配置，并使用当前 Node.js 的绝对路径注册 `git-panel`。如果已有同名但指向其他位置的配置，它会停止并提示核对，不会覆盖。可用 `codex mcp get git-panel --json` 查看安装结果。重新打开 Codex 后，在聊天中调用 `open_git_panel`；也可在 **更多工具 → 插件和 MCP → Git 提交** 中打开（入口名称随 Codex 版本可能变化）。
 
-如果 Codex CLI 不在 `PATH`，设置 `GIT_PANEL_CODEX_COMMAND` 为其可执行文件绝对路径后重试。手动配置方式见 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)：
+如果 Codex CLI 不在 `PATH`，设置 `GIT_PANEL_CODEX_COMMAND` 为其可执行文件绝对路径后重试。若自定义了 `CODEX_HOME`，请先创建该目录。手动配置方式见 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)：
 
 ```toml
 [mcp_servers.git-panel]
@@ -37,7 +37,7 @@ args = ["/absolute/path/to/codex-git-panel/server/mcp.mjs"]
 tool_timeout_sec = 300
 ```
 
-安装脚本创建的配置可在 `~/.codex/config.toml` 的 `[mcp_servers.git-panel]` 下补充 `tool_timeout_sec = 300`，给 AI 生成和远程操作留足时间。Windows 请使用本机实际的 Node 和面板路径，并用 TOML 支持的路径写法。
+安装脚本创建的配置可在 `~/.codex/config.toml` 的 `[mcp_servers.git-panel]` 下补充 `tool_timeout_sec = 300`，给 AI 生成和远程操作留足时间。
 
 ## 使用
 

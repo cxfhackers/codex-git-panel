@@ -9,8 +9,8 @@ import { syncTargets } from './sync.mjs';
 import { branchList, mergePreview } from './branches.mjs';
 import { conflictPreview } from './conflicts.mjs';
 
-const uri = 'ui://git-panel/0.8.5/main.html';
-const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version: '0.8.5' });
+const uri = 'ui://git-panel/0.8.6/main.html';
+const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version: '0.8.6' });
 const repos = new Map(), locks = new Map();
 const repoFields = { id: z.string().regex(/^[a-f0-9]{24}$/) };
 const revisionFields = { ...repoFields, revision: z.string().regex(/^[a-f0-9]{64}$/) };
@@ -55,6 +55,7 @@ async function panelResource(requestUri) { return {
   }],
 }; }
 server.registerResource('git-panel', uri, { mimeType: 'text/html;profile=mcp-app' }, () => panelResource(uri));
+server.registerResource('git-panel-0.8.5', 'ui://git-panel/0.8.5/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.5/main.html'));
 server.registerResource('git-panel-0.8.4', 'ui://git-panel/0.8.4/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.4/main.html'));
 server.registerResource('git-panel-0.8.3', 'ui://git-panel/0.8.3/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.3/main.html'));
 server.registerResource('git-panel-legacy', 'ui://git-panel/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/main.html'));
