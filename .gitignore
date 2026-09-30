@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.codegraph/
+server/project-repositories.json
+README.internal.md
+INTEGRATION.md
+design/
+*.jpg
+*.png

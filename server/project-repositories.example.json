@@ -1,0 +1,11 @@
+{
+  "groups": [
+    {
+      "label": "示例项目",
+      "repositories": [
+        { "label": "前端", "root": "/absolute/path/to/frontend" },
+        { "label": "后端", "root": "/absolute/path/to/backend" }
+      ]
+    }
+  ]
+}
