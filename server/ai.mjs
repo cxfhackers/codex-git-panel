@@ -7,9 +7,9 @@ import { git, snapshot } from './git.mjs';
 const schema = { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' } }, required: ['title', 'body'], additionalProperties: false };
 export async function collectStaged(root, before) {
   if (before.operation) throw new Error('请先完成当前 Git 操作，再生成普通提交说明');
-  const files = before.files.filter(f => f.staged);
+  const files = before.files.filter(f => f.staged && !f.excluded);
   if (!files.length) throw new Error('请先暂存需要提交的内容');
-  const patch = await git(root, ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-color', '--full-index']);
+  const patch = await git(root, ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-color', '--full-index', '--', ...new Set(files.flatMap(f => [f.path, ...(f.oldPath ? [f.oldPath] : [])]))]);
   if (Buffer.byteLength(patch) > 180000) throw new Error('暂存差异超过 180 KB，请拆分本次提交后再生成，避免 AI 漏读');
   if (!patch.trim()) throw new Error('暂存内容没有可分析的差异');
   if ((await snapshot(root)).revision !== before.revision) throw new Error('暂存内容已变化，请重新生成');

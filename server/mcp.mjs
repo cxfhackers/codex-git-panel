@@ -1,3 +1,6 @@
+import { readComparison } from './editor-compare.mjs';
+import { listShelves, shelfDiff } from './shelves.mjs';
+import { waitForChanges, stopWatching } from './watch.mjs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -9,8 +12,8 @@ import { syncTargets } from './sync.mjs';
 import { branchList, mergePreview } from './branches.mjs';
 import { conflictPreview } from './conflicts.mjs';
 
-const uri = 'ui://git-panel/0.8.7/main.html';
-const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version: '0.8.7' });
+const uri = 'ui://git-panel/0.10.0/main.html';
+const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version: '0.10.0' });
 const repos = new Map(), locks = new Map();
 const repoFields = { id: z.string().regex(/^[a-f0-9]{24}$/) };
 const revisionFields = { ...repoFields, revision: z.string().regex(/^[a-f0-9]{64}$/) };
@@ -55,13 +58,15 @@ async function panelResource(requestUri) { return {
   }],
 }; }
 server.registerResource('git-panel', uri, { mimeType: 'text/html;profile=mcp-app' }, () => panelResource(uri));
+server.registerResource('git-panel-0.9.0', 'ui://git-panel/0.9.0/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.9.0/main.html'));
+server.registerResource('git-panel-0.8.7', 'ui://git-panel/0.8.7/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.7/main.html'));
 server.registerResource('git-panel-0.8.6', 'ui://git-panel/0.8.6/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.6/main.html'));
 server.registerResource('git-panel-0.8.5', 'ui://git-panel/0.8.5/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.5/main.html'));
 server.registerResource('git-panel-0.8.4', 'ui://git-panel/0.8.4/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.4/main.html'));
 server.registerResource('git-panel-0.8.3', 'ui://git-panel/0.8.3/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.3/main.html'));
 server.registerResource('git-panel-legacy', 'ui://git-panel/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/main.html'));
 server.registerTool('open_git_panel', {
-  title: 'Git 提交', description: '在侧边栏打开本机 Git 提交面板。查看文件差异、选择暂存内容及提交。',
+  title: 'Git 提交', description: '在侧边栏打开本机 Git 提交面板。查看和编辑文件差异、按分组勾选提交、搁置恢复。',
   inputSchema: {}, annotations: { readOnlyHint: true, openWorldHint: false },
   _meta: { ui: { resourceUri: uri }, 'openai/ui': { entrypoints: [{ type: 'thread' }] } },
 }, async () => result(session, 'Git 提交面板已准备好，仓库范围来自当前项目。'));
@@ -74,8 +79,21 @@ register('git_open_repository', '读取用户选定的本机 Git 仓库', { root
   repos.set(id, root); return { id, state };
 });
 register('git_repository_state', '读取 Git 状态', repoFields, true, async ({ id }) => snapshot(rootFor(id)));
+register('git_read_editable_file', '读取仓库内文本文件用于编辑', { ...repoFields, path: z.string().min(1) }, true, ({ id, path }) => readComparison(rootFor(id), path));
+register('git_save_file', '保存文件草稿，校验磁盘版本并保留暂存内容', { ...repoFields, path: z.string().min(1), token: z.string().regex(/^[a-f0-9]{64}$/), content: z.string().max(524288) }, false, args => action('file-save', args));
+register('git_set_exclusions', '设置本仓库永不提交文件及目录规则，并移出暂存区', { ...revisionFields, rules: z.array(z.object({ path: z.string().min(1), type: z.enum(['file', 'directory']), excluded: z.boolean().optional() })).max(2000) }, false, args => action('exclusions', args));
+register('git_wait_changes', '等待本地文件变化，无变化时不扫描仓库', { ...repoFields, client: z.string().max(80), version: z.string().max(80).optional() }, true, ({ id, ...args }) => waitForChanges(rootFor(id), args));
+register('git_stop_watching', '释放当前面板的文件监听', { ...repoFields, client: z.string().max(80) }, true, ({ id, client }) => stopWatching(rootFor(id), client));
 register('git_file_diff', '读取文件差异', { ...repoFields, path: z.string().min(1), staged: z.boolean() }, true,
   async ({ id, path, staged }) => ({ patch: await diff(rootFor(id), path, staged) }));
+const pathsField = z.array(z.string().min(1)).min(1).max(500);
+register('git_changelist_action', '整理本仓库更改分组和新文件偏好', { ...revisionFields, op: z.enum(['create', 'rename', 'remove', 'set-active', 'move', 'policy']), groupId: z.string().optional(), name: z.string().max(120).optional(), paths: pathsField.optional(), newFilePolicy: z.enum(['manual', 'ask', 'auto']).optional() }, false, args => action('changelist', args));
+register('git_commit_selected', '仅提交本次勾选文件，保留其他文件和暂存内容', { ...revisionFields, paths: pathsField, message: z.string().trim().min(1).max(65536) }, false, args => action('commit-selected', args));
+register('git_generate_selected_message', 'AI 分析本次勾选文件并生成提交信息', { ...revisionFields, paths: pathsField }, true, args => action('generate-selected', args), { openWorldHint: true });
+register('git_list_shelves', '读取已保存的搁置列表', repoFields, true, async ({ id }) => ({ shelves: await listShelves(rootFor(id)) }));
+register('git_shelf_diff', '预览搁置文件的差异', { ...repoFields, shelfId: z.string(), path: z.string().min(1) }, true, ({ id, shelfId, path }) => shelfDiff(rootFor(id), shelfId, path));
+register('git_create_shelf', '保存所选文件的改动并从当前工作区撤下', { ...revisionFields, paths: pathsField, name: z.string().min(1).max(120), groupId: z.string().optional() }, false, args => action('shelf-create', args));
+register('git_restore_shelf', '恢复所选搁置文件，冲突时核对合并结果', { ...revisionFields, shelfId: z.string(), paths: pathsField.optional(), groupId: z.string().optional(), resolutions: z.array(z.object({ path: z.string(), token: z.string(), content: z.string().optional(), choice: z.enum(['current', 'shelf']).optional() })).optional() }, false, args => action('shelf-restore', args));
 register('git_stage_file', '暂存指定文件', fileFields, false, args => action('stage', args));
 register('git_unstage_file', '取消暂存指定文件并保留修改', fileFields, false, args => action('unstage', args));
 register('git_set_files_staged', '批量暂存或移出选定文件并保留工作区内容', { ...revisionFields, paths: z.array(z.string().min(1)).min(1).max(500), staged: z.boolean() }, false, args => action('set-staging', args));

@@ -1,3 +1,8 @@
+import { readChangelists, changelistAction } from './changelists.mjs';
+import { selectedCommit, generateSelectedMessage } from './selected-commit.mjs';
+import { createShelf, restoreShelf } from './shelves.mjs';
+import { readRules, isExcluded, updateRules, unstageExcluded } from './exclusions.mjs';
+import { saveEditable } from './editor.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -11,7 +16,7 @@ export async function git(root, args, options = {}) {
   try {
     const r = await execute('git', [...(literalPathspecs ? ['--literal-pathspecs'] : []), '-C', root, ...args], {
       encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 60000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' }, ...executionOptions,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' }, ...executionOptions,
     });
     return r.stdout;
   } catch (e) {
@@ -69,7 +74,9 @@ export async function snapshot(root) {
     operationStatus(root),
     git(root, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}']).catch(() => ''),
   ]);
-  const files = parseStatus(status);
+  const exclusions = await readRules(root);
+  const files = parseStatus(status).map(file => ({ ...file, excluded: isExcluded(file, exclusions) }));
+  const changelists = await readChangelists(root, files);
   const head = headText.trim();
   const hash = createHash('sha256').update(head).update(status).update(cached).update(work);
   let untrackedBytes = 0;
@@ -92,12 +99,12 @@ export async function snapshot(root) {
   const headRef = refText.trim();
   const branch = headRef ? headRef.replace(/^refs\/heads\//, '') : 'detached HEAD';
   const upstream = upstreamText.trim();
-  hash.update(headRef).update(JSON.stringify(operation));
+  hash.update(headRef).update(JSON.stringify(operation)).update(JSON.stringify(exclusions)).update(JSON.stringify(changelists));
   let sync = null;
   if (head && upstream && countsText.trim()) {
     const counts = countsText.trim().split(/\s+/).map(Number); sync = { ahead: counts[0], behind: counts[1], name: upstream };
   }
-  return { root, branch, headRef, upstream, head, operation, sync, revision: hash.digest('hex'), files };
+  return { root, branch, headRef, upstream, head, operation, sync, revision: hash.digest('hex'), files, exclusions, changelists };
 }
 export async function diff(root, path, staged) {
   // A read-only preview needs path validation, not hashes of every unrelated file.
@@ -136,8 +143,38 @@ async function applyPatch(root, patch, reverse) {
   });
 }
 export async function mutate(root, action, body) {
-  const before = await snapshot(root);
+  if (action === 'file-save') {
+    const file = await saveEditable(root, body);
+    try { return { file, state: await snapshot(root) }; }
+    catch (error) { return { file, warning: '文件已保存；Git 状态暂未同步：' + error.message }; }
+  }
+  let before = await snapshot(root);
   if (before.revision !== body.revision) throw new Error('仓库内容已变化，请刷新后重新核对');
+  if (action === 'changelist') { await changelistAction(root, before, body); return { state: await snapshot(root) }; }
+  if (action === 'commit-selected') return selectedCommit(root, before, body);
+  if (action === 'generate-selected') return generateSelectedMessage(root, before, body);
+  if (action === 'shelf-create' || action === 'shelf-restore') {
+    if (body.groupId && !before.changelists.groups.some(g => g.id === body.groupId)) throw new Error('目标分组已变化，请重新选择');
+    const result = await (action === 'shelf-create' ? createShelf : restoreShelf)(root, before, body);
+    let next = await snapshot(root);
+    if (action === 'shelf-restore' && result.status !== 'conflict' && body.groupId) {
+      const affected = new Set(result.affectedPaths || result.paths || []);
+      const paths = next.files.filter(f => !f.excluded && !f.conflict && (affected.has(f.path) || affected.has(f.oldPath))).map(f => f.path);
+      if (paths.length) {
+        try {
+          const untracked = next.files.filter(f => paths.includes(f.path) && f.code === '??').map(f => f.path);
+          if (untracked.length) { await git(root, ['add', '-A', '--', ...untracked]); next = await snapshot(root); }
+          await changelistAction(root, next, { op: 'move', groupId: body.groupId, paths }); next = await snapshot(root);
+        }
+        catch (error) { result.warning = '文件已恢复，分组整理暂未完成：' + error.message; }
+      }
+    }
+    return { ...result, state: next };
+  }
+  if (action === 'exclusions') { await updateRules(root, before, body); return { state: await snapshot(root) }; }
+  const protectedFile = before.files.find(f => f.path === body.path && f.excluded);
+  if (protectedFile && (['stage', 'resolve', 'conflict-apply'].includes(action) || action === 'hunk' && !body.staged)) throw new Error('此文件属于永不提交，请先移出该分组');
+  if (['merge-continue', 'rebase-continue'].includes(action) && before.files.some(f => f.excluded && f.staged)) throw new Error('暂存区含有永不提交文件，请先核对分组规则再继续');
   if (['conflict-ai', 'conflict-apply'].includes(action)) {
     const { suggestConflict, applyConflict } = await import('./conflicts.mjs');
     return action === 'conflict-ai' ? suggestConflict(root, before, body) : applyConflict(root, before, body);
@@ -146,6 +183,7 @@ export async function mutate(root, action, body) {
     if (!Array.isArray(body.paths) || !body.paths.length || body.paths.length > 500 || typeof body.staged !== 'boolean' || body.paths.some(p => typeof p !== 'string' || !p)) throw new Error('暂存文件列表无效');
     const selected = [...new Set(body.paths)].map(path => before.files.find(f => f.path === path));
     if (selected.some(f => !f || f.conflict)) throw new Error('文件已变化或仍有冲突，请刷新后核对');
+    if (body.staged && selected.some(f => f.excluded)) throw new Error('所选文件包含永不提交文件');
     const paths = [...new Set(selected.flatMap(f => [f.path, ...(f.oldPath ? [f.oldPath] : [])]))];
     await git(root, body.staged ? ['add', '-A', '--', ...paths] : before.head ? ['restore', '--staged', '--', ...paths] : ['rm', '--cached', '-r', '--', ...paths]);
     return { state: await snapshot(root) };
@@ -190,6 +228,7 @@ export async function mutate(root, action, body) {
   } else if (action === 'commit') {
     if (before.operation) throw new Error('仓库有未完成的 Git 操作；合并请使用“继续合并”，其他操作请先在终端完成');
     if (typeof body.message !== 'string' || !body.message.trim()) throw new Error('请填写提交信息');
+    if (before.files.some(f => f.excluded && f.staged)) { await unstageExcluded(root, before, before.exclusions); before = await snapshot(root); }
     if (!before.files.some(f => f.staged)) throw new Error('没有已暂存的内容');
     const output = await git(root, ['commit', '-m', body.message.trim()]);
     return { state: await snapshot(root), output };

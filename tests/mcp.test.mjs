@@ -25,7 +25,7 @@ test('MCP exposes one thread entrypoint and a self-contained UI with no network 
   const c = await clientFor(t), { tools } = await c.listTools();
   const launchers = tools.filter(x => x._meta?.['openai/ui']?.entrypoints?.some(e => e.type === 'thread'));
   assert.equal(launchers.length, 1); assert.equal(launchers[0].title, 'Git 提交');
-  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.8.7/main.html');
+  assert.equal(launchers[0]._meta.ui.resourceUri, 'ui://git-panel/0.10.0/main.html');
   const resource = await c.readResource({ uri: launchers[0]._meta.ui.resourceUri });
   const html = resource.contents[0];
   assert.equal(html.mimeType, 'text/html;profile=mcp-app');
@@ -34,7 +34,7 @@ test('MCP exposes one thread entrypoint and a self-contained UI with no network 
   assert.deepEqual(html._meta.ui.csp, { connectDomains: [], resourceDomains: [] });
   assert.deepEqual(tools.find(x => x.name === 'git_commit_staged')._meta.ui.visibility, ['app']);
   assert.equal(tools.find(x => x.name === 'git_commit_staged').annotations.readOnlyHint, false);
-  assert.equal(tools.length, 29);
+  assert.equal(tools.length, 41);
   assert.equal(tools.find(x => x.name === 'git_conflict_versions').annotations.readOnlyHint, true);
   assert.equal(tools.find(x => x.name === 'git_suggest_conflict_merge').annotations.openWorldHint, true);
   assert.equal(tools.find(x => x.name === 'git_apply_conflict_merge').annotations.readOnlyHint, false);
@@ -130,4 +130,22 @@ test('MCP Git workflow commits only selected file and rejects stale revisions an
   assert.match(await git(root, ['status', '--porcelain']), / M leave.txt/);
   const invalid = await c.callTool({ name: 'git_repository_state', arguments: { id: 'f'.repeat(24) } });
   assert.equal(invalid.isError, true); assert.match(invalid.content[0].text, /失效/);
+});
+test('MCP protects selected files and edits their worktree content without staging', async t => {
+  const c = await clientFor(t), root = await mkdtemp(join(scratch, 'workspace-mcp-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await git(root, ['init', '-b', 'main']); await writeFile(join(root, 'local.txt'), 'local\n'); await writeFile(join(root, 'public.txt'), 'public\n');
+  const { id, state } = await call(c, 'git_open_repository', { root });
+  let result = await call(c, 'git_set_exclusions', { id, revision: state.revision, rules: [{ type: 'file', path: 'local.txt' }] });
+  assert.equal(result.state.files.find(f => f.path === 'local.txt').excluded, true);
+  const denied = await c.callTool({ name: 'git_stage_file', arguments: { id, revision: result.state.revision, path: 'local.txt' } });
+  assert.equal(denied.isError, true);
+  const file = await call(c, 'git_read_editable_file', { id, path: 'local.txt' });
+  result = await call(c, 'git_save_file', { id, path: file.path, token: file.token, content: 'saved in panel\n' });
+  assert.equal(result.file.content, 'saved in panel\n'); assert.equal(result.state.files.find(f => f.path === 'local.txt').staged, false);
+  const watch = await call(c, 'git_wait_changes', { id, client: 'mcp-watch-test' }); assert.equal(typeof watch.version, 'string');
+  await call(c, 'git_stop_watching', { id, client: 'mcp-watch-test' });
+  result = await call(c, 'git_set_exclusions', { id, revision: result.state.revision, rules: [] });
+  result = await call(c, 'git_set_files_staged', { id, revision: result.state.revision, paths: ['local.txt'], staged: true });
+  assert.equal(result.state.files.find(f => f.path === 'local.txt').staged, true);
 });

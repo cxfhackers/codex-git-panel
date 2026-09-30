@@ -1,3 +1,6 @@
+import { readComparison } from './editor-compare.mjs';
+import { listShelves, shelfDiff } from './shelves.mjs';
+import { waitForChanges, stopWatching } from './watch.mjs';
 import http from 'node:http';
 import { readFile, realpath } from 'node:fs/promises';
 import { join, dirname, extname } from 'node:path';
@@ -34,6 +37,11 @@ const server = http.createServer(async (req, res) => {
       }
       const id = url.searchParams.get('id'); const root = repos.get(id);
       if (!root) return send(res, 400, { error: '请先选择仓库' });
+      if (url.pathname === '/api/file' && req.method === 'POST') return send(res, 200, await readComparison(root, (await body(req)).path));
+      if (url.pathname === '/api/shelves' && req.method === 'GET') return send(res, 200, { shelves: await listShelves(root) });
+      if (url.pathname === '/api/shelf-diff' && req.method === 'POST') { const input = await body(req); return send(res, 200, await shelfDiff(root, input.shelfId, input.path)); }
+      if (url.pathname === '/api/watch' && req.method === 'POST') return send(res, 200, await waitForChanges(root, await body(req)));
+      if (url.pathname === '/api/watch-stop' && req.method === 'POST') return send(res, 200, await stopWatching(root, (await body(req)).client));
       if (url.pathname === '/api/state' && req.method === 'GET') return send(res, 200, await snapshot(root));
       if (url.pathname === '/api/sync-targets' && req.method === 'GET') return send(res, 200, await syncTargets(root));
       if (url.pathname === '/api/branches' && req.method === 'GET') return send(res, 200, await branchList(root));
