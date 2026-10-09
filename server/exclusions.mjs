@@ -34,6 +34,13 @@ async function persistRules(root, rules) {
   const file = await location(root), temporary = file + '.' + randomUUID();
   await writeFile(temporary, JSON.stringify(rules, null, 2), { mode: 0o600 }); await rename(temporary, file);
 }
+export async function removeFileProtection(root, paths) {
+  const selected = new Set(paths), before = await readRules(root);
+  const rules = before.filter(rule => rule.type !== 'file' || !selected.has(rule.path));
+  for (const path of selected) if (rules.some(rule => rule.type === 'directory' && (path === rule.path || path.startsWith(rule.path + '/')))) rules.push({ type: 'file', path, excluded: false });
+  const normalized = normalizeRules(rules);
+  if (JSON.stringify(before) !== JSON.stringify(normalized)) await persistRules(root, normalized);
+}
 export async function unstageExcluded(root, before, rules) {
   const files = before.files.filter(f => f.staged && isExcluded(f, rules));
   const renamedPaths = files.filter(f => f.oldPath).flatMap(f => [f.path, f.oldPath]).filter(path => !isExcluded({ path }, rules));

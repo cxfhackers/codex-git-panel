@@ -1,10 +1,10 @@
 import { readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { git } from './git.mjs';
-import { validPath } from './exclusions.mjs';
+import { git, snapshot } from './git.mjs';
+import { validPath, removeFileProtection } from './exclusions.mjs';
 
-const defaults = () => ({ groups: [{ id: 'changes', name: '更改' }], activeId: 'changes', assignments: Object.create(null), newFilePolicy: 'manual' });
+const defaults = () => ({ groups: [{ id: 'changes', name: '更改' }], activeId: 'changes', assignments: Object.create(null), newFilePolicy: 'manual', manualUntracked: [] });
 const policies = ['manual', 'ask', 'auto'];
 const virtualNames = ['永不提交', '未受版本控制'];
 function label(value) {
@@ -27,7 +27,9 @@ function normalize(value) {
   const assignments = Object.create(null), entries = Object.entries(value.assignments || {});
   if (entries.length > 50000) throw new Error('分组文件数量超过限制');
   for (const [path, id] of entries) if (validPath(path) && seen.has(id)) assignments[path] = id;
-  return { groups, activeId: seen.has(value.activeId) ? value.activeId : 'changes', assignments, newFilePolicy: policies.includes(value.newFilePolicy) ? value.newFilePolicy : 'manual' };
+  const manualUntracked = [...new Set((Array.isArray(value.manualUntracked) ? value.manualUntracked : []).filter(validPath))];
+  if (manualUntracked.length > 50000) throw new Error('手动保留未跟踪文件数量超过限制');
+  return { groups, activeId: seen.has(value.activeId) ? value.activeId : 'changes', assignments, newFilePolicy: policies.includes(value.newFilePolicy) ? value.newFilePolicy : 'manual', manualUntracked };
 }
 
 // Reconcile in memory only. Snapshot reads never write metadata or trigger watcher loops.
@@ -54,8 +56,41 @@ export async function forgetChangelistPaths(root, paths) {
   for (const path of paths) if (Object.hasOwn(data.assignments, path)) { delete data.assignments[path]; changed = true; }
   if (changed) await persist(root, data);
 }
+export async function clearManualUntracked(root, paths) {
+  const data = await readChangelists(root), selected = new Set(paths);
+  const remaining = data.manualUntracked.filter(path => !selected.has(path));
+  if (remaining.length !== data.manualUntracked.length) { data.manualUntracked = remaining; await persist(root, data); }
+}
+export async function rememberManualUntracked(root, paths) {
+  if (!paths.length) return;
+  const data = await readChangelists(root);
+  data.manualUntracked = [...new Set([...data.manualUntracked, ...paths])];
+  await persist(root, normalize(data));
+}
+
+async function moveToUnversioned(root, before, body, data) {
+  if (!Array.isArray(body.paths) || !body.paths.length || body.paths.length > 500 || body.paths.some(path => !validPath(path))) throw new Error('请选择需要撤销添加的新文件');
+  const paths = [...new Set(body.paths)], selected = paths.map(path => before.files.find(file => file.path === path));
+  if (selected.some(file => !file || file.conflict || file.oldPath || file.code[1] === 'D')) throw new Error('所选文件已变化、存在冲突或重命名，请重新核对');
+  // A tracked file must never become a staged deletion just to match a UI group.
+  if (before.head) {
+    const committed = await git(root, ['ls-tree', '-r', '--name-only', '-z', before.head, '--', ...paths]);
+    if (committed) throw new Error('已提交过的文件撤销暂存后仍属于更改；未受版本控制仅接收尚未提交的新文件');
+  }
+  const nextManual = [...new Set([...data.manualUntracked, ...paths])];
+  normalize({ ...data, manualUntracked: nextManual });
+  if ((await snapshot(root)).revision !== before.revision) throw new Error('仓库内容已变化，请重新核对');
+  const indexed = selected.filter(file => file.code !== '??').map(file => file.path);
+  if (indexed.length) await git(root, before.head ? ['restore', '--source=' + before.head, '--staged', '--', ...indexed] : ['rm', '--cached', '-f', '--', ...indexed]);
+  await removeFileProtection(root, paths);
+  for (const path of paths) delete data.assignments[path];
+  data.manualUntracked = nextManual;
+  await persist(root, normalize(data));
+  return data;
+}
 export async function changelistAction(root, before, body) {
   const data = await readChangelists(root, before.files);
+  if (body.op === 'move' && body.groupId === 'unversioned') return moveToUnversioned(root, before, body, data);
   const find = () => { const group = data.groups.find(item => item.id === body.groupId); if (!group) throw new Error('分组已不存在'); return group; };
   if (body.op === 'create') {
     const name = label(body.name);
@@ -84,6 +119,7 @@ export async function changelistAction(root, before, body) {
     if (selected.some(file => !file)) throw new Error('文件列表已变化，请重新选择');
     if (selected.some(file => file.excluded)) throw new Error('请先把文件移出永不提交，再移动到其他分组');
     for (const file of selected) { data.assignments[file.path] = body.groupId; if (file.oldPath && /R/.test(file.code)) delete data.assignments[file.oldPath]; }
+    data.manualUntracked = data.manualUntracked.filter(path => !body.paths.includes(path));
   } else if (body.op === 'policy') {
     if (!policies.includes(body.newFilePolicy)) throw new Error('新文件处理方式无效');
     data.newFilePolicy = body.newFilePolicy;

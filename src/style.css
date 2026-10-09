@@ -95,3 +95,15 @@ dialog{padding:18px;max-height:calc(100dvh - 32px);overflow:auto;scrollbar-gutte
 @media(max-width:780px){.workspace{grid-template-columns:minmax(220px,40%) minmax(0,1fr)}.tree-file .file-name{flex-direction:column;gap:1px}.tree-file .file-name span{max-width:100%}.tree-file{min-height:35px}.group-actions{opacity:1}.shelf-three-way{grid-template-columns:1fr}.commit-panel textarea{height:55px}.sync-status .count-label{display:none}}
 @media(max-width:520px){.workspace{grid-template-columns:minmax(155px,43%) minmax(0,1fr)}.tree-file{padding-left:12px}.group-row{gap:3px}.active-list{display:none}.group-actions{display:none}.tree-hint{display:none}.toolbar{gap:5px;padding:6px}.toolbar h1{font-size:16px}.commit-actions>span{font-size:11px}.commit-actions button{padding:6px 8px}}
 .tree-file .file-name{justify-content:flex-start}
+.change-group{position:relative;border-radius:5px;padding-block-end:2px;margin-block-end:2px}
+.change-group.drop-target{background:#283b56;box-shadow:inset 0 0 0 1px #75a7ff}
+.change-group.drop-target .group-row{background:#30486a}
+.change-group.drop-rejected{box-shadow:inset 0 0 0 1px #bf8b57}
+.drop-rejected .group-drop-hint{background:#443525;color:#edc394}
+.group-drop-hint{position:absolute;inset-inline-end:6px;inset-block-start:5px;max-inline-size:calc(100% - 48px);padding:2px 6px;border-radius:3px;background:#30486a;line-height:16px;color:#b6d1ff;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.is-dragging .group-actions{visibility:hidden}
+.tree-file[draggable=true],.tree-file[draggable=true] .file-name{cursor:grab;-webkit-user-select:none;user-select:none}
+.is-dragging .tree-file,.is-dragging .file-name{cursor:grabbing}
+
+.rollback-files{max-height:220px;overflow:auto;padding:10px 10px 10px 28px;background:#202226;border:1px solid var(--border);border-radius:5px;overflow-wrap:anywhere}
+.rollback-files li{padding:3px 0}

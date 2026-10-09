@@ -174,7 +174,7 @@ function selectedFiles(before, paths) {
 async function assertRevision(root, before) {
   if ((await snapshot(root)).revision !== before.revision) throw new Error('仓库内容已变化，请重新核对后再操作');
 }
-export async function createShelf(root, before, body) {
+export async function createShelf(root, before, body, { retainAdded = false } = {}) {
   if (before.operation) throw new Error('请先结束正在进行的合并或恢复，再搁置文件');
   const files = selectedFiles(before, body.paths);
   const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -190,6 +190,7 @@ export async function createShelf(root, before, body) {
       if (seen.has(path)) continue; seen.add(path);
       const work = await workVersion(root, path, record);
       const entry = { path, base: base.get(path) || null, index: index.get(path) || null, work: work.version, token: work.token };
+      if (retainAdded && !file.oldPath && !entry.base) entry.retainWork = true;
       fileEntries.push(entry); entries.push(entry);
     }
     if (fileEntries.length) record.files.push({ path: file.path, ...(file.oldPath ? { oldPath: file.oldPath } : {}), kind: file.kind, entries: fileEntries });
@@ -198,6 +199,7 @@ export async function createShelf(root, before, body) {
   const completed = [];
   try {
     for (const entry of entries) {
+      if (entry.retainWork) continue;
       const token = await replaceWork(root, entry.path, entry.token, entry.base, record); completed.push({ entry, token });
     }
     await setIndex(root, entries.map(entry => ({ path: entry.path, version: entry.base })), record);
@@ -210,7 +212,7 @@ export async function createShelf(root, before, body) {
     throw new Error(`搁置未完成，备份“${record.name}”已保留。${error.message}${failures.length ? '\n' + failures.join('\n') : '；所处理的文件已恢复'}`);
   }
   record.phase = 'shelved'; await persist(root, record);
-  return { status: 'success', shelf: publicRecord(record), output: `已搁置 ${record.files.length} 个文件：${record.name}` };
+  return { status: 'success', shelf: publicRecord(record), retainedPaths: entries.filter(entry => entry.retainWork).map(entry => entry.path), output: `已搁置 ${record.files.length} 个文件：${record.name}` };
 }
 async function mergeVersion(record, base, current, incoming) {
   if (equal(current, base)) return { version: incoming };

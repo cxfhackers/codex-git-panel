@@ -1,4 +1,4 @@
-import { readChangelists, changelistAction } from './changelists.mjs';
+import { readChangelists, changelistAction, clearManualUntracked, rememberManualUntracked } from './changelists.mjs';
 import { selectedCommit, generateSelectedMessage } from './selected-commit.mjs';
 import { createShelf, restoreShelf } from './shelves.mjs';
 import { readRules, isExcluded, updateRules, unstageExcluded } from './exclusions.mjs';
@@ -150,6 +150,14 @@ export async function mutate(root, action, body) {
   }
   let before = await snapshot(root);
   if (before.revision !== body.revision) throw new Error('仓库内容已变化，请刷新后重新核对');
+  if (action === 'rollback') {
+    if (body.confirm !== true) throw new Error('请先确认需要回退的文件');
+    if (Array.isArray(body.paths) && body.paths.some(path => before.files.find(file => file.path === path)?.code === '??')) throw new Error('未受版本控制的文件没有可回退的提交版本；本地文件已保留');
+    const result = await createShelf(root, before, { paths: body.paths, name: '回退备份 ' + new Date().toISOString(), groupId: before.changelists.activeId }, { retainAdded: true });
+    try { await rememberManualUntracked(root, result.retainedPaths); }
+    catch (error) { result.warning = '回退已完成，手动保留新文件的设置未保存：' + error.message; }
+    return { ...result, state: await snapshot(root), output: `已回退 ${result.shelf.files.length} 个文件；新增文件保留在本地。原改动可从“搁置”的“${result.shelf.name}”恢复。` };
+  }
   if (action === 'changelist') { await changelistAction(root, before, body); return { state: await snapshot(root) }; }
   if (action === 'commit-selected') return selectedCommit(root, before, body);
   if (action === 'generate-selected') return generateSelectedMessage(root, before, body);
@@ -186,6 +194,7 @@ export async function mutate(root, action, body) {
     if (body.staged && selected.some(f => f.excluded)) throw new Error('所选文件包含永不提交文件');
     const paths = [...new Set(selected.flatMap(f => [f.path, ...(f.oldPath ? [f.oldPath] : [])]))];
     await git(root, body.staged ? ['add', '-A', '--', ...paths] : before.head ? ['restore', '--staged', '--', ...paths] : ['rm', '--cached', '-r', '--', ...paths]);
+    if (body.staged) await clearManualUntracked(root, paths);
     return { state: await snapshot(root) };
   }
   if (['restore-retry', 'restore-finish'].includes(action)) { const { recoveryAction } = await import('./local-changes.mjs'); return recoveryAction(root, action, before); }

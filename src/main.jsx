@@ -1,7 +1,7 @@
-import InlineEditor from './InlineEditor';
+import InlineEditor, { discardEditorDrafts, dirtyEditorPaths } from './InlineEditor';
 import ChangeTree from './ChangeTree';
 import Shelves from './Shelves';
-import { commitPaths } from './changes';
+import { commitPaths, autoAddPaths } from './changes';
 import ExclusionDialog from './ExclusionDialog';
 import { useRepositoryWatch } from './useRepositoryWatch';
 import React, { useState, useEffect, useRef } from 'react';
@@ -23,6 +23,7 @@ function App() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [included, setIncluded] = useState(new Set()), [dirtyPaths, setDirtyPaths] = useState([]);
   const [shelfForm, setShelfForm] = useState(null), [shelfName, setShelfName] = useState('');
+  const [rollbackForm, setRollbackForm] = useState(null), [editorEpoch, setEditorEpoch] = useState(0);
   const autoAttempt = useRef('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [message, setMessage] = useState(''), [generated, setGenerated] = useState(''), [custom, setCustom] = useState('');
@@ -87,7 +88,7 @@ function App() {
       context.current.id = data.id; setId(data.id); acceptState(data.state);
       setProjects(current => current.some(p => p.root === data.state.root) ? current : [...current, { label: data.state.root.split('/').at(-1), root: data.state.root }]);
       setTab('work'); setIncluded(new Set()); setPath(''); setPatch(''); setDiffLoading(false); let draft = {}; try { draft = JSON.parse(storage.get(draftKey(data.state.root)) || '{}'); } catch {} setDraft(draft.message || '', draft.generated || '');
-      setSyncInfo(null); setSyncMode(''); setResolvePath(''); setRulesOpen(false);
+      setSyncInfo(null); setSyncMode(''); setResolvePath(''); setRulesOpen(false); setRollbackForm(null);
       storage.set('git-panel-root:' + projectKey.current, data.state.root); setCustom(data.state.root); setDialog('');
       setBranchOpen(false); setMergeConfirm('');
     });
@@ -108,6 +109,11 @@ function App() {
     return result;
   }
   async function moveFiles(groupId, paths) {
+    if (groupId === 'unversioned') {
+      const result = await action('changelist', { op: 'move', groupId, paths });
+      if (result) { onInclude(paths, false); setNotice('已撤销添加，本地文件保留；这些文件不会被自动重新添加'); }
+      return result;
+    }
     if (groupId === 'excluded') {
       const files = state.files.filter(f => paths.includes(f.path));
       return changeRules([...(state.exclusions || []), ...files.flatMap(f => [f.path, ...(f.oldPath ? [f.oldPath] : [])].map(path => ({ type: 'file', path })))]);
@@ -134,10 +140,24 @@ function App() {
     const result = await action('shelf-create', { ...shelfForm, name: shelfName });
     if (result) { setShelfForm(null); setTab('shelf'); setPath(''); setNotice(result.output || '所选改动已搁置，可在搁置列表恢复'); }
   }
+  function requestRollback(paths) {
+    const selected = state.files.filter(file => paths.includes(file.path));
+    setRollbackForm({ id, revision: state.revision, files: selected, paths: selected.map(file => file.path) });
+  }
+  async function rollbackFiles() {
+    const form = rollbackForm;
+    if (!form || form.id !== context.current.id) return;
+    const result = await action('rollback', { revision: form.revision, paths: form.paths, confirm: true });
+    if (result) {
+      const affected = form.files.flatMap(file => [file.path, ...(file.oldPath ? [file.oldPath] : [])]);
+      discardEditorDrafts(form.id, affected); setDirtyPaths(dirtyEditorPaths(form.id));
+      setEditorEpoch(value => value + 1); onInclude(affected, false); setRollbackForm(null);
+    } else setRollbackForm(null);
+  }
   async function addFiles(paths) { return action('set-staging', { paths, staged: true }); }
   useEffect(() => {
     if (!state || state.changelists?.newFilePolicy !== 'auto' || locked || state.operation) return;
-    const paths = state.files.filter(f => f.code === '??' && !f.excluded).map(f => f.path).slice(0, 500);
+    const paths = autoAddPaths(state);
     if (!paths.length) return;
     const key = id + ':' + state.revision;
     if (autoAttempt.current === key) return;
@@ -215,12 +235,20 @@ function App() {
     <nav className="work-tabs" aria-label="提交与搁置"><button className={tab === 'work' ? 'active' : ''} aria-current={tab === 'work' ? 'page' : undefined} onClick={() => setTab('work')}>提交 <span>{displayFiles.length}</span></button><button className={tab === 'shelf' ? 'active' : ''} aria-current={tab === 'shelf' ? 'page' : undefined} onClick={() => setTab('shelf')}>搁置</button></nav>
     <div className="workspace">
       {tab === 'shelf' && state ? <Shelves key={id} id={id} state={state} busy={locked} onAction={action}/> : <>
-        <aside className="file-pane"><ChangeTree state={state} included={included} onInclude={onInclude} onFile={f => { setPath(f.path); if (f.conflict) setResolvePath(f.path); }} path={path} busy={locked} onMove={moveFiles} onGroup={body => action('changelist', body)} onShelf={requestShelf} onRules={() => setRulesOpen(true)} onPolicy={newFilePolicy => action('changelist', { op: 'policy', newFilePolicy })} onAdd={addFiles}/></aside>
-        <InlineEditor repoId={id} path={file ? path : ''} revision={state?.revision} loadFile={p => request(`/api/file?id=${id}`, { path: p })} saveFile={saveFile} onDraftsChange={setDirtyPaths} busy={locked} patch={patch} loading={diffLoading}/>
+        <aside className="file-pane"><ChangeTree state={state} included={included} onInclude={onInclude} onFile={f => { setPath(f.path); if (f.conflict) setResolvePath(f.path); }} path={path} busy={locked} onMove={moveFiles} onGroup={body => action('changelist', body)} onShelf={requestShelf} onRules={() => setRulesOpen(true)} onPolicy={newFilePolicy => action('changelist', { op: 'policy', newFilePolicy })} onAdd={addFiles} onRollback={requestRollback}/></aside>
+        <InlineEditor key={editorEpoch} onRollback={file && !file.conflict && file.code !== '??' && !state?.operation ? () => requestRollback([path]) : undefined} repoId={id} path={file ? path : ''} revision={state?.revision} loadFile={p => request(`/api/file?id=${id}`, { path: p })} saveFile={saveFile} onDraftsChange={setDirtyPaths} busy={locked} patch={patch} loading={diffLoading}/>
       </>}
     </div>
     {tab === 'work' && <section className="commit-panel"><div className="commit-heading"><label htmlFor="message">提交信息</label><button disabled={locked || !!state?.operation || !chosenPaths.length || changedDrafts} onClick={() => action('generate-selected', { paths: chosenPaths })} title="AI 分析本次勾选文件的实际修改"><Sparkles size={15}/>{busy ? '处理中…' : 'AI 生成'}</button></div><textarea disabled={busy} id="message" placeholder="描述本次修改…" value={message} onChange={e => setDraft(e.target.value)} spellCheck={false}/>{changed && <div className="message-warning">勾选范围或文件内容已变化，请核对或重新生成提交说明。</div>}{changedDrafts && <div className="message-warning">勾选文件有未保存的编辑，请先在右侧保存。</div>}<div className="commit-actions"><span><Check size={15}/>本次勾选 {chosenPaths.length} 个文件</span><div><button className="primary" disabled={locked || !!state?.operation || !!conflicts.length || !message.trim() || !chosenPaths.length || changedDrafts} onClick={() => commit(false)}>提交</button><button disabled={locked || !!state?.operation || !!conflicts.length || !message.trim() || !chosenPaths.length || changedDrafts} title="提交勾选文件，随后检查远程并推送" onClick={() => commit(true)}><ArrowUp size={15}/>提交并推送</button></div></div></section>}
-    <footer>{state ? `${state.files.length} 个更改文件 · ${chosenPaths.length} 个勾选` : isMcp ? 'MCP · 本机 Git' : '本地 Git 工具'}<span className="watch-status" title="监听本地变化，不自动访问远程">{watcher.status}</span><span>{state?.upstream || (state ? '未设置上游' : '代码保留在本机')}</span><small>v0.10.0</small></footer>
+    <footer>{state ? `${state.files.length} 个更改文件 · ${chosenPaths.length} 个勾选` : isMcp ? 'MCP · 本机 Git' : '本地 Git 工具'}<span className="watch-status" title="监听本地变化，不自动访问远程">{watcher.status}</span><span>{state?.upstream || (state ? '未设置上游' : '代码保留在本机')}</span><small>v0.10.3</small></footer>
+    {rollbackForm && <Dialog busy={locked} onClose={() => setRollbackForm(null)} aria-labelledby="rollback-title">
+      <h2 id="rollback-title">回退所选文件</h2>
+      <p>放弃以下 {rollbackForm.paths.length} 个文件的本地修改，恢复到当前分支最近一次提交。已暂存的修改也会回退。</p>
+      <ul className="rollback-files">{rollbackForm.files.map(file => <li key={file.path}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</li>)}</ul>
+      <p className="sync-help">新增但未提交的文件只撤销添加，保留本地内容。磁盘上的原改动会自动备份到“搁置”。</p>
+      {rollbackForm.paths.some(path => dirtyPaths.includes(path)) && <p className="form-error">所选文件在编辑区尚未保存的草稿也将丢弃；草稿不包含在搁置备份中。</p>}
+      <div className="dialog-actions"><button data-dialog-autofocus disabled={locked} onClick={() => setRollbackForm(null)}>取消</button><button className="danger" disabled={locked} onClick={rollbackFiles}>确认回退</button></div>
+    </Dialog>}
     {shelfForm && <Dialog busy={locked} onClose={() => setShelfForm(null)} aria-labelledby="shelf-create-title"><h2 id="shelf-create-title">搁置所选改动</h2><p>保存 {shelfForm.paths.length} 个文件的改动后，将它们从当前工作区撤下。其他文件保留。</p><label htmlFor="shelf-name">搁置名称</label><input id="shelf-name" value={shelfName} onChange={e => setShelfName(e.target.value)} autoFocus maxLength={120}/><div className="dialog-actions"><button onClick={() => setShelfForm(null)}>取消</button><button className="primary" disabled={locked || !shelfName.trim()} onClick={createShelf}>搁置</button></div></Dialog>}
     {rulesOpen && <ExclusionDialog error={error} rules={state?.exclusions || []} busy={locked} onChange={changeRules} onClose={() => setRulesOpen(false)}/>}
     {syncMode && <SyncDialog key={id + syncMode} id={id} mode={syncMode} state={state} onExecute={syncAction} onClose={() => setSyncMode('')}/>}

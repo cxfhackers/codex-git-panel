@@ -29,9 +29,9 @@ async function call(client, name, args = {}) {
   return response.structuredContent;
 }
 
-test('IDEA MCP exposes 41 tools and commits only checked working-copy content after grouping', async t => {
+test('IDEA MCP exposes 42 tools and commits only checked working-copy content after grouping', async t => {
   const { root, client } = await fixture(t), { tools } = await client.listTools();
-  assert.equal(tools.length, 41);
+  assert.equal(tools.length, 42);
   for (const name of ['git_changelist_action', 'git_commit_selected', 'git_generate_selected_message', 'git_list_shelves', 'git_shelf_diff', 'git_create_shelf', 'git_restore_shelf']) {
     assert.deepEqual(tools.find(tool => tool.name === name)?._meta.ui.visibility, ['app']);
   }
@@ -93,4 +93,16 @@ test('IDEA MCP watcher wakes for group metadata changes and state revision inval
     const latest = await call(client, 'git_repository_state', { id });
     assert.equal(latest.revision, changed.state.revision); assert.equal(latest.changelists.groups.at(-1).name, '另一面板的分组');
   } finally { clearTimeout(timer); await call(client, 'git_stop_watching', { id, client: listener }); }
+});
+
+test('IDEA MCP rollback restores selected HEAD content and exposes a recoverable backup', async t => {
+  const { root, client } = await fixture(t);
+  await writeFile(join(root, 'chosen.txt'), 'discard this\n'); await git(root, ['add', 'chosen.txt']);
+  const { id, state } = await call(client, 'git_open_repository', { root });
+  const result = await call(client, 'git_rollback_files', { id, revision: state.revision, paths: ['chosen.txt'], confirm: true });
+  assert.equal(await readFile(join(root, 'chosen.txt'), 'utf8'), 'chosen base\n');
+  assert.equal(result.state.files.length, 0);
+  assert.equal((await call(client, 'git_list_shelves', { id })).shelves[0].id, result.shelf.id);
+  await call(client, 'git_restore_shelf', { id, revision: result.state.revision, shelfId: result.shelf.id });
+  assert.equal(await readFile(join(root, 'chosen.txt'), 'utf8'), 'discard this\n');
 });

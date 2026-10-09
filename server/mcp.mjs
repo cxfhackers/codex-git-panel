@@ -4,7 +4,7 @@ import { waitForChanges, stopWatching } from './watch.mjs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { repository, snapshot, diff, mutate } from './git.mjs';
 import { session, scopedRepository } from './projects.mjs';
@@ -12,8 +12,12 @@ import { syncTargets } from './sync.mjs';
 import { branchList, mergePreview } from './branches.mjs';
 import { conflictPreview } from './conflicts.mjs';
 
-const uri = 'ui://git-panel/0.10.0/main.html';
-const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version: '0.10.0' });
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+// A URI identifies immutable UI bytes. Each new build gets a different cache key.
+const panelHtml = await readFile(new URL('../dist-mcp/index.html', import.meta.url), 'utf8');
+const uiHash = createHash('sha256').update(panelHtml).digest('hex').slice(0, 16);
+const uri = `ui://git-panel/${version}/main-${uiHash}.html`;
+const server = new McpServer({ name: 'codex-git-panel', title: 'Git 提交', version });
 const repos = new Map(), locks = new Map();
 const repoFields = { id: z.string().regex(/^[a-f0-9]{24}$/) };
 const revisionFields = { ...repoFields, revision: z.string().regex(/^[a-f0-9]{64}$/) };
@@ -53,11 +57,15 @@ async function action(name, args) {
 async function panelResource(requestUri) { return {
   contents: [{
     uri: requestUri, mimeType: 'text/html;profile=mcp-app',
-    text: await readFile(new URL('../dist-mcp/index.html', import.meta.url), 'utf8'),
+    text: panelHtml,
     _meta: { ui: { prefersBorder: false, csp: { connectDomains: [], resourceDomains: [] } } },
   }],
 }; }
 server.registerResource('git-panel', uri, { mimeType: 'text/html;profile=mcp-app' }, () => panelResource(uri));
+server.registerResource('git-panel-current', `ui://git-panel/${version}/main.html`, { mimeType: 'text/html;profile=mcp-app' }, () => panelResource(`ui://git-panel/${version}/main.html`));
+server.registerResource('git-panel-0.10.2', 'ui://git-panel/0.10.2/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.10.2/main.html'));
+server.registerResource('git-panel-0.10.1', 'ui://git-panel/0.10.1/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.10.1/main.html'));
+server.registerResource('git-panel-0.10.0', 'ui://git-panel/0.10.0/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.10.0/main.html'));
 server.registerResource('git-panel-0.9.0', 'ui://git-panel/0.9.0/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.9.0/main.html'));
 server.registerResource('git-panel-0.8.7', 'ui://git-panel/0.8.7/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.7/main.html'));
 server.registerResource('git-panel-0.8.6', 'ui://git-panel/0.8.6/main.html', { mimeType: 'text/html;profile=mcp-app' }, () => panelResource('ui://git-panel/0.8.6/main.html'));
@@ -87,6 +95,7 @@ register('git_stop_watching', '释放当前面板的文件监听', { ...repoFiel
 register('git_file_diff', '读取文件差异', { ...repoFields, path: z.string().min(1), staged: z.boolean() }, true,
   async ({ id, path, staged }) => ({ patch: await diff(rootFor(id), path, staged) }));
 const pathsField = z.array(z.string().min(1)).min(1).max(500);
+register('git_rollback_files', '回退所选文件到当前 HEAD，自动搁置备份；新增文件仅撤销添加', { ...revisionFields, paths: pathsField, confirm: z.literal(true) }, false, args => action('rollback', args), { destructiveHint: true });
 register('git_changelist_action', '整理本仓库更改分组和新文件偏好', { ...revisionFields, op: z.enum(['create', 'rename', 'remove', 'set-active', 'move', 'policy']), groupId: z.string().optional(), name: z.string().max(120).optional(), paths: pathsField.optional(), newFilePolicy: z.enum(['manual', 'ask', 'auto']).optional() }, false, args => action('changelist', args));
 register('git_commit_selected', '仅提交本次勾选文件，保留其他文件和暂存内容', { ...revisionFields, paths: pathsField, message: z.string().trim().min(1).max(65536) }, false, args => action('commit-selected', args));
 register('git_generate_selected_message', 'AI 分析本次勾选文件并生成提交信息', { ...revisionFields, paths: pathsField }, true, args => action('generate-selected', args), { openWorldHint: true });

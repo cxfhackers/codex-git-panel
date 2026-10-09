@@ -10,7 +10,7 @@ async function call(name, args = {}) {
 }
 export async function initialize() {
   if (isMcp) {
-    bridge = new App({ name: 'Git 提交', version: '0.10.0' }, {}, { autoResize: false });
+    bridge = new App({ name: 'Git 提交', version: '0.10.3' }, {}, { autoResize: false });
     connected = bridge.connect(undefined, { timeout: 15000 });
     return call('git_panel_session');
   }
@@ -35,6 +35,7 @@ export async function request(route, data) {
     if (url.pathname === '/api/conflict') return call('git_conflict_versions', { id, ...data });
     if (url.pathname === '/api/diff') return call('git_file_diff', { id, path: url.searchParams.get('path'), staged: url.searchParams.get('staged') === 'true' });
     if (url.pathname === '/api/action') {
+      if (data.action === 'rollback') { const { action, ...args } = data; return call('git_rollback_files', { id, ...args }); }
       if (['conflict-ai', 'conflict-apply'].includes(data.action)) { const { action, ...args } = data; return call(action === 'conflict-ai' ? 'git_suggest_conflict_merge' : 'git_apply_conflict_merge', { id, ...args }); }
       if (data.action === 'set-staging') { const { action, ...args } = data; return call('git_set_files_staged', { id, ...args }); }
       const names = { changelist: 'git_changelist_action', 'commit-selected': 'git_commit_selected', 'generate-selected': 'git_generate_selected_message', 'shelf-create': 'git_create_shelf', 'shelf-restore': 'git_restore_shelf', 'file-save': 'git_save_file', exclusions: 'git_set_exclusions', 'restore-retry': 'git_retry_local_restore', 'restore-finish': 'git_finish_local_restore', 'sync-check': 'git_check_push', 'sync-update': 'git_update_remote', 'rebase-continue': 'git_continue_rebase', 'rebase-abort': 'git_abort_rebase', stage: 'git_stage_file', unstage: 'git_unstage_file', hunk: 'git_stage_hunk', generate: 'git_generate_message', commit: 'git_commit_staged', push: 'git_push_branch', switch: 'git_switch_branch', merge: 'git_merge_branch', 'merge-continue': 'git_continue_merge', 'merge-abort': 'git_abort_merge', resolve: 'git_resolve_conflict_file' };

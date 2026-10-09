@@ -77,7 +77,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.url !== '/') { res.writeHead(404); return res.end(); }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><html lang="zh-CN"><title>MCP Git 面板 · 桥接验证</title><style>body{margin:0;background:#1e1f22;color:#aeb8c8;font:12px system-ui}header{height:32px;display:flex;align-items:center;padding:0 12px;background:#29303b}iframe{display:block;width:100%;height:calc(100dvh - 32px);border:0}</style><header id="status">MCP 桥接验证宿主 · 临时仓库</header><iframe title="Git MCP 面板" src="/app" sandbox="allow-scripts allow-same-origin"></iframe><script>
+    res.end(`<!doctype html><html lang="zh-CN"><title>MCP Git 面板 · 桥接验证</title><style>body{margin:0;background:#1e1f22;color:#aeb8c8;font:12px system-ui}header{height:32px;display:flex;align-items:center;padding:0 12px;background:#29303b}iframe{display:block;width:100%;height:calc(100dvh - 32px);border:0}</style><header id="status">MCP 桥接验证宿主 · 临时仓库</header><iframe title="Git MCP 面板" src="/app" sandbox="allow-scripts allow-same-origin allow-forms"></iframe><script>
     const frame=document.querySelector('iframe');
     window.addEventListener('message',async event=>{
       if(event.source!==frame.contentWindow||event.origin!==location.origin)return;

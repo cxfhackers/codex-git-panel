@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlignLeft, Columns2, FileDiff, Save, Undo2, Redo2 } from 'lucide-react';
+import { AlignLeft, Columns2, FileDiff, Save, Undo2, Redo2, RotateCcw } from 'lucide-react';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyField, historyKeymap, undo, redo, undoDepth, redoDepth } from '@codemirror/commands';
@@ -34,6 +34,10 @@ function syncDraftGuard() {
 }
 export function dirtyEditorPaths(repoId) {
   return [...drafts.values()].filter(entry => entry.repoId === repoId && dirty(entry)).map(entry => entry.path);
+}
+export function discardEditorDrafts(repoId, paths) {
+  for (const path of paths) drafts.delete(draftKey(repoId, path));
+  syncDraftGuard();
 }
 function compactCleanDrafts() {
   const clean = [...drafts.entries()].filter(([, entry]) => !dirty(entry));
@@ -77,7 +81,7 @@ const theme = EditorView.theme({
   '.cm-searchMatch-selected': { backgroundColor: '#8b713b' },
 }, { dark: true });
 
-export default function InlineEditor({ repoId, path, revision, loadFile, saveFile, onSaved, onDraftsChange, busy = false, patch = '', loading = false }) {
+export default function InlineEditor({ repoId, path, revision, loadFile, saveFile, onSaved, onDraftsChange, busy = false, patch = '', loading = false, onRollback }) {
   const key = draftKey(repoId, path), entry = drafts.get(key);
   const host = useRef(null), view = useRef(null), editable = useRef(null), callbacks = useRef({});
   const activeKey = useRef(key), saving = useRef(false), saveCurrent = useRef(null);
@@ -207,6 +211,7 @@ export default function InlineEditor({ repoId, path, revision, loadFile, saveFil
     <header className="diff-heading inline-editor-heading">
       <div><strong>{path ? path.split('/').at(-1) : '改动预览'}{isDirty && <i className="editor-draft-mark" title="有未保存的修改">●</i>}</strong><span title={path}>{path || '选择一个文件查看差异并编辑'}</span></div>
       <div className="diff-tools">
+        {onRollback && <button aria-label="回退当前文件" title="恢复到本地最近一次提交" disabled={busy || isSaving} onClick={onRollback}><RotateCcw size={14}/>回退</button>}
         {writable && <>
           <button className="icon-button" aria-label="撤销编辑" title="撤销 · ⌘ / Ctrl + Z" disabled={busy || isSaving || !editorState || !undoDepth(editorState)} onClick={() => { if (view.current) { undo(view.current); view.current.focus(); } }}><Undo2 size={15}/></button>
           <button className="icon-button" aria-label="重做编辑" title="重做 · ⌘ / Ctrl + Shift + Z" disabled={busy || isSaving || !editorState || !redoDepth(editorState)} onClick={() => { if (view.current) { redo(view.current); view.current.focus(); } }}><Redo2 size={15}/></button>
